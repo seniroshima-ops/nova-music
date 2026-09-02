@@ -14,6 +14,7 @@ class MusicApp(App):
         self.ytmusic = YTMusic()
         self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
 
+        # Search Bar
         search_box = BoxLayout(orientation='horizontal', size_hint_y=0.15, spacing=5)
         self.search_input = TextInput(hint_text="Search song or artist...", multiline=False)
         search_btn = Button(text="Search", size_hint_x=0.3, background_color=(0.2, 0.6, 1, 1))
@@ -23,9 +24,11 @@ class MusicApp(App):
         search_box.add_widget(search_btn)
         self.layout.add_widget(search_box)
 
-        self.status_label = Label(text="Welcome! Search for a song.", size_hint_y=0.1)
+        # Status Label
+        self.status_label = Label(text="Welcome to Nova Music!", size_hint_y=0.1)
         self.layout.add_widget(self.status_label)
 
+        # Scrollable Results List
         self.scroll = ScrollView(size_hint=(1, 0.75))
         self.results_list = BoxLayout(orientation='vertical', size_hint_y=None, spacing=5)
         self.results_list.bind(minimum_height=self.results_list.setter('height'))
@@ -61,7 +64,7 @@ class MusicApp(App):
             self.status_label.text = f"Error: {str(e)}"
 
     def play_song(self, video_id, title):
-        self.status_label.text = f"Loading: {title}..."
+        self.status_label.text = f"Loading stream for: {title}..."
         threading.Thread(target=self._extract_and_play, args=(video_id, title), daemon=True).start()
 
     def _extract_and_play(self, video_id, title):
@@ -79,7 +82,7 @@ class MusicApp(App):
             if sound:
                 sound.play()
         except Exception as e:
-            self.status_label.text = f"Error: {str(e)}"
+            self.status_label.text = f"Playback Error: {str(e)}"
 
 if __name__ == "__main__":
     MusicApp().run()
