@@ -1,88 +1,129 @@
 import os
 import threading
-from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.label import Label
-from kivy.uix.scrollview import ScrollView
+from flask import Flask, render_template_string, jsonify, request
 from ytmusicapi import YTMusic
 import yt_dlp
 
-class MusicApp(App):
-    def build(self):
-        self.ytmusic = YTMusic()
-        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+app = Flask(__name__)
+ytmusic = YTMusic()
 
-        # Search Bar
-        search_box = BoxLayout(orientation='horizontal', size_hint_y=0.15, spacing=5)
-        self.search_input = TextInput(hint_text="Search song or artist...", multiline=False)
-        search_btn = Button(text="Search", size_hint_x=0.3, background_color=(0.2, 0.6, 1, 1))
-        search_btn.bind(on_press=self.start_search)
-        
-        search_box.add_widget(self.search_input)
-        search_box.add_widget(search_btn)
-        self.layout.add_widget(search_box)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nova Music</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: white; padding: 15px; margin: 0; }
+        h2 { color: #1db954; text-align: center; }
+        .search-box { display: flex; gap: 8px; margin-bottom: 20px; }
+        input { flex: 1; padding: 12px; border-radius: 8px; border: none; font-size: 16px; }
+        button { background: #1db954; color: white; border: none; padding: 12px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .song-card { background: #282828; padding: 12px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .song-info { max-width: 70%; }
+        .song-title { font-weight: bold; font-size: 14px; margin-bottom: 4px; }
+        .song-artist { color: #b3b3b3; font-size: 12px; }
+        audio { width: 100%; margin-top: 20px; position: fixed; bottom: 10px; left: 0; padding: 0 10px; box-sizing: border-box; }
+        #status { text-align: center; font-size: 13px; color: #b3b3b3; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h2>Nova Music</h2>
+    <div class="search-box">
+        <input type="text" id="query" placeholder="Search song or artist...">
+        <button onclick="search()">Search</button>
+    </div>
+    <div id="status">Search for your favorite song!</div>
+    <div id="results"></div>
+    <audio id="player" controls autoplay></audio>
 
-        # Status Label
-        self.status_label = Label(text="Welcome to Nova Music!", size_hint_y=0.1)
-        self.layout.add_widget(self.status_label)
+    <script>
+        async function search() {
+            const q = document.getElementById('query').value;
+            if(!q) return;
+            document.getElementById('status').innerText = 'Searching...';
+            document.getElementById('results').innerHTML = '';
+            
+            const res = await fetch('/search?q=' + encodeURIComponent(q));
+            const data = await res.json();
+            
+            document.getElementById('status').innerText = 'Results for: ' + q;
+            let html = '';
+            data.forEach(item => {
+                html += `
+                    <div class="song-card">
+                        <div class="song-info">
+                            <div class="song-title">${item.title}</div>
+                            <div class="song-artist">${item.artist}</div>
+                        </div>
+                        <button onclick="play('${item.id}', '${item.title.replace(/'/g, "\\'")}')">▶ Play</button>
+                    </div>
+                `;
+            });
+            document.getElementById('results').innerHTML = html;
+        }
 
-        # Scrollable Results List
-        self.scroll = ScrollView(size_hint=(1, 0.75))
-        self.results_list = BoxLayout(orientation='vertical', size_hint_y=None, spacing=5)
-        self.results_list.bind(minimum_height=self.results_list.setter('height'))
-        self.scroll.add_widget(self.results_list)
-        self.layout.add_widget(self.scroll)
+        async function play(id, title) {
+            document.getElementById('status').innerText = 'Loading stream for: ' + title + '...';
+            const res = await fetch('/stream?id=' + id);
+            const data = await res.json();
+            if(data.url) {
+                const player = document.getElementById('player');
+                player.src = data.url;
+                player.play();
+                document.getElementById('status').innerText = 'Playing: ' + title;
+            } else {
+                document.getElementById('status').innerText = 'Error playing song.';
+            }
+        }
+    </script>
+</body>
+</html>
+"""
 
-        return self.layout
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
 
-    def start_search(self, instance):
-        query = self.search_input.text.strip()
-        if not query:
-            return
-        self.status_label.text = f"Searching for '{query}'..."
-        threading.Thread(target=self.run_search, args=(query,), daemon=True).start()
+@app.route('/search')
+def search():
+    query = request.args.get('q', '')
+    results = ytmusic.search(query, filter="songs", limit=6)
+    data = []
+    for item in results:
+        data.append({
+            'id': item.get('videoId'),
+            'title': item.get('title'),
+            'artist': ", ".join([a['name'] for a in item.get('artists', [])])
+        })
+    return jsonify(data)
 
-    def run_search(self, query):
-        try:
-            results = self.ytmusic.search(query, filter="songs", limit=6)
-            self.results_list.clear_widgets()
+@app.route('/stream')
+def stream():
+    video_id = request.args.get('id', '')
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return jsonify({'url': info['url']})
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
-            for item in results:
-                title = item.get("title", "Unknown")
-                artists = ", ".join([a["name"] for a in item.get("artists", [])])
-                video_id = item.get("videoId")
+def start_flask():
+    app.run(host='127.0.0.1', port=5000)
 
-                btn_text = f"▶ {title} - {artists}"
-                btn = Button(text=btn_text, size_hint_y=None, height=60)
-                btn.bind(on_press=lambda inst, v=video_id, t=title: self.play_song(v, t))
-                self.results_list.add_widget(btn)
-
-            self.status_label.text = "Select a song to play:"
-        except Exception as e:
-            self.status_label.text = f"Error: {str(e)}"
-
-    def play_song(self, video_id, title):
-        self.status_label.text = f"Loading stream for: {title}..."
-        threading.Thread(target=self._extract_and_play, args=(video_id, title), daemon=True).start()
-
-    def _extract_and_play(self, video_id, title):
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                stream_url = info['url']
-
-            self.status_label.text = f"Playing: {title}"
-            from kivy.core.audio import SoundLoader
-            sound = SoundLoader.load(stream_url)
-            if sound:
-                sound.play()
-        except Exception as e:
-            self.status_label.text = f"Playback Error: {str(e)}"
-
-if __name__ == "__main__":
-    MusicApp().run()
+if __name__ == '__main__':
+    threading.Thread(target=start_flask, daemon=True).start()
+    
+    # Kivy WebView Container
+    from kivy.app import App
+    from kivy.uix.webview import WebView
+    
+    class NovaApp(App):
+        def build(self):
+            wv = WebView()
+            wv.url = 'http://127.0.0.1:5000'
+            return wv
+            
+    NovaApp().run()
